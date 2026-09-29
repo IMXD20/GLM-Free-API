@@ -54,7 +54,7 @@ RUN if [ ! -f go.mod ]; then go mod init zai-api; fi \
 # ── Runtime ──────────────────────────────────────────────────────────────
 # Official Playwright image: exact-version browsers + all OS deps.
 # The collector's runtime playwright.Install() then becomes a no-op check.
-FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_IMAGE}-noble
+FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_IMAGE}-noble
 
 COPY --from=builder /out/token-collector /usr/local/bin/token-collector
 
