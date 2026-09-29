@@ -1,0 +1,18 @@
+# Keep the build context small and hermetic.
+.git/
+.assets/
+image-gen/
+tests/
+
+# Never bake secrets or local state into the image.
+.env
+tokens.sqlite
+tokens.sqlite-shm
+tokens.sqlite-wal
+*.log
+
+# Local build artifacts.
+zai-api
+zai-bridge
+token-collector
+token-collector.exe

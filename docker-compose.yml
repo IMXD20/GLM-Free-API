@@ -1,0 +1,49 @@
+# GLM Bridge — single-server deploy.
+#
+# Usage:
+#   1. cp .env.example .env  (or export the vars below) and set AUTH_TOKEN.
+#   2. docker compose up -d --build
+#   3. Harvest tokens locally (needs a browser, so it runs outside Docker):
+#        go run ./cmd/token-collector   # produces tokens.sqlite
+#      then make it live with zero downtime — copy it into the volume and
+#      hot-swap without restarting:
+#        docker cp tokens.sqlite glm-bridge:/data/tokens.sqlite
+#        curl -X POST http://localhost:3001/sqlite \
+#          -H "Authorization: Bearer $AUTH_TOKEN" \
+#          -H "Content-Type: application/json" \
+#          -d '{"db_path": "/data/tokens.sqlite"}'
+#
+# The server also starts with an empty /data (guest mode, tokenCount -1);
+# captcha-backed requests fail until a token db is provided as above.
+
+services:
+  api:
+    build: .
+    image: zai-api:latest
+    container_name: glm-bridge
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3001}:3001"
+    environment:
+      PORT: 3001
+      HOST: 0.0.0.0
+      AUTH_TOKEN: ${AUTH_TOKEN:?set AUTH_TOKEN in .env or environment}
+      ZAI_TOKEN: ${ZAI_TOKEN:-}
+      AGENT_MODE: ${AGENT_MODE:-true}
+      AGENT_MODE_VARIANT: ${AGENT_MODE_VARIANT:-modern}
+      SESSION_POOL_SIZE: ${SESSION_POOL_SIZE:-5}
+      SESSION_REUSE_COUNT: ${SESSION_REUSE_COUNT:-10}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - zai-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Server flags; add e.g. "--sync-mode" or "--agent-mode-level=ultra" here.
+    command: ["--db-path=/data/tokens.sqlite"]
+
+volumes:
+  zai-data:

@@ -68,17 +68,24 @@ func Run() {
     flag.Parse()
 
     if _, err := os.Stat(dbPath); err != nil {
-        log.Println("Captcha db not found! Please run the token collector first (cmd/token-collector)")
+        // No token database (yet): start anyway and serve with tokenCount -1.
+        // Captcha-backed requests will fail until a database is provided —
+        // either by mounting one at --db-path or by hot-swapping one in via
+        // POST /sqlite (no restart needed). Set REQUIRE_DB=1 to restore the
+        // legacy hard-exit when the file is missing.
+        if v := os.Getenv("REQUIRE_DB"); v == "1" || v == "true" {
+            log.Println("Captcha db not found! Please run the token collector first (cmd/token-collector)")
+            os.Exit(1)
+        }
+        log.Printf("WARNING: token db not found at '%s' — starting without it (captcha will fail until a db is mounted or POSTed to /sqlite)", dbPath)
+    } else if err := initDB(); err != nil {
+        fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
         os.Exit(1)
+    } else {
+        defer closeDB()
     }
 
     logInfo("Starting with db-path='" + dbPath + "' verbose=true")
-
-    if err := initDB(); err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
-        os.Exit(1)
-    }
-    defer closeDB()
 
     gRunning.Store(true)
 
