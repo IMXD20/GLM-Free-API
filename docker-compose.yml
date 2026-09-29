@@ -1,13 +1,13 @@
-# GLM Bridge — single-server deploy.
+# GLM Bridge — server deploy + containerized token harvesting.
 #
 # Usage:
 #   1. cp .env.example .env  (or export the vars below) and set AUTH_TOKEN.
-#   2. docker compose up -d --build
-#   3. Harvest tokens locally (needs a browser, so it runs outside Docker):
-#        go run ./cmd/token-collector   # produces tokens.sqlite
-#      then make it live with zero downtime — copy it into the volume and
-#      hot-swap without restarting:
-#        docker cp tokens.sqlite glm-bridge:/data/tokens.sqlite
+#   2. docker compose up -d --build          # starts the api only
+#   3. Harvest tokens into the shared volume (headless, no TTY needed):
+#        docker compose --profile collect run --rm collector --tokens 850 --batch 5 --parallel 3 --no-tui
+#      or interactive with the TUI:
+#        docker compose --profile collect run --rm -it collector --tokens 850 --batch 5 --parallel 3
+#   4. Point the running api at the fresh file — zero downtime, no restart:
 #        curl -X POST http://localhost:3001/sqlite \
 #          -H "Authorization: Bearer $AUTH_TOKEN" \
 #          -H "Content-Type: application/json" \
@@ -44,6 +44,23 @@ services:
       start_period: 20s
     # Server flags; add e.g. "--sync-mode" or "--agent-mode-level=ultra" here.
     command: ["--db-path=/data/tokens.sqlite"]
+
+  # Token harvester (Dockerfile.collector). Opt-in via profile so plain
+  # `up` never starts it; `run` mounts the shared volume and drops
+  # ./tokens.sqlite where the api reads it. Chromium needs a large shm.
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    image: zai-collector:latest
+    profiles: ["collect"]
+    shm_size: 2gb
+    volumes:
+      - zai-data:/data
+    # Non-interactive defaults; override per run, e.g.:
+    #   docker compose --profile collect run --rm collector --tokens 750 --batch 3 --parallel 2 --no-tui
+    #   docker compose --profile collect run --rm -it collector --tokens 850 --batch 5   # TUI needs -it
+    command: ["--tokens=850", "--batch=5", "--parallel=3", "--no-tui"]
 
 volumes:
   zai-data:

@@ -1,0 +1,71 @@
+# Token collector — harvests device tokens into /data/tokens.sqlite.
+#
+# Build:  docker build -f Dockerfile.collector -t zai-collector .
+# Collect (interactive TUI, needs a TTY):
+#   docker run --rm -it --shm-size=2g -v zai-data:/data zai-collector \
+#     --tokens 850 --batch 5 --parallel 3
+# Collect (non-interactive, no TTY — cron/CI friendly):
+#   docker run --rm --shm-size=2g -v zai-data:/data zai-collector \
+#     --tokens 850 --batch 5 --parallel 3 --no-tui
+# Via compose (shares the api's volume; then hot-swap into the live api):
+#   docker compose --profile collect run --rm collector --tokens 850 --batch 5 --parallel 3 --no-tui
+#   curl -X POST http://localhost:3001/sqlite \
+#     -H "Authorization: Bearer $AUTH_TOKEN" -H "Content-Type: application/json" \
+#     -d '{"db_path": "/data/tokens.sqlite"}'
+#
+# Notes:
+# - Headless by default (the collector's --headless=new stealth mode needs no
+#   X display). --headed is NOT supported in the container (no display server).
+# - Output is always ./tokens.sqlite, so WORKDIR is /data: with the shared
+#   zai-data volume the file lands where the api reads it.
+# - --shm-size=2g (or --ipc=host) is required: Chromium tabs crash under
+#   Docker's default 64 MB /dev/shm, especially with --parallel workers.
+# - Runs as pwuser (uid 1000) — the same uid as the api image's app user —
+#   so both containers share the zai-data volume without permission issues.
+# - Version pins: PLAYWRIGHT_GO must stay in sync with go.mod, and
+#   PLAYWRIGHT_IMAGE with that driver's bundled Playwright version
+#   (v0.6201.1 bundles the v1.62.1 driver). Override at build time:
+#   --build-arg PLAYWRIGHT_GO=vX --build-arg PLAYWRIGHT_IMAGE=vY.
+# - Build on the target server (or --platform=...): browser binaries are
+#   arch-specific and the base image resolves them per platform.
+
+ARG PLAYWRIGHT_GO=v0.6201.1
+ARG PLAYWRIGHT_IMAGE=v1.62.1
+
+# ── Builder ──────────────────────────────────────────────────────────────
+FROM golang:1-alpine AS builder
+
+ARG PLAYWRIGHT_GO
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+
+# The repo ships without go.mod by design (see README step 2), so init it
+# when absent (e.g. a clean git clone as the build context) — then pin the
+# playwright-go driver before tidy so it can't drift from the base image.
+COPY . .
+RUN if [ ! -f go.mod ]; then go mod init zai-api; fi \
+    && go get "github.com/mxschmitt/playwright-go@${PLAYWRIGHT_GO}" \
+    && go mod tidy \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+        -o /out/token-collector ./cmd/token-collector
+
+# ── Runtime ──────────────────────────────────────────────────────────────
+# Official Playwright image: exact-version browsers + all OS deps.
+# The collector's runtime playwright.Install() then becomes a no-op check.
+FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_IMAGE}-noble
+
+COPY --from=builder /out/token-collector /usr/local/bin/token-collector
+
+RUN mkdir -p /data && chown pwuser:pwuser /data
+
+USER pwuser
+WORKDIR /data
+
+VOLUME ["/data"]
+
+# Exec form; override per run, e.g.:
+#   docker run ... zai-collector --tokens 750 --batch 3 --parallel 2 --no-tui
+ENTRYPOINT ["token-collector"]
+CMD ["--tokens=850", "--batch=5", "--parallel=3", "--no-tui"]
